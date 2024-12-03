@@ -73,21 +73,21 @@ type Options struct {
     // 推送中断级别
     Level string `json:"level,omitempty"`
     // 指定复制的内容
-    Copy string `json:"copy,omitempty"`
+    Copy *string `json:"copy,omitempty"`
     // 自动复制
-    AutoCopy bool `json:"autoCopy,omitempty"`
+    AutoCopy *bool `json:"autoCopy,omitempty"`
     // 推送铃声
     Sound string `json:"sound,omitempty"`
     // 自定义图标，传入URL
     Icon string `json:"icon,omitempty"`
     // 推送角标
-    Badge int `json:"badge,omitempty"`
+    Badge *int `json:"badge,omitempty"`
     // 传 1 保存推送，传其他的不保存推送，不传按APP内设置来决定是否保存。
     IsArchive int `json:"isArchive,omitempty,string"`
     //持续响铃 1 持续响铃30秒
     Call int `json:"call,omitempty,string"`
     //level 为 critical时设置声音大小,取值0-10,不传默认为5
-    Volume int `json:"volume,omitempty,string"`
+    Volume *int `json:"volume,omitempty,string"`
     // 加密传输
     Enc *EncOpt `json:"-"`
 }
