@@ -4,14 +4,14 @@ bark 推送 golang sdk，支持加密传输
 
 ## Example
 ```shell
-go get  github.com/gaoyaxuan/go-bark@latest
+go get github.com/gaoyaxuan/go-bark@latest
 
 ```
 
 ```Go
 package main
 
-import bark "github.com/gaoyaxuan/go-bark"
+import "github.com/gaoyaxuan/go-bark"
 
 func main() {
 	err := bark.Push(&bark.Options{
