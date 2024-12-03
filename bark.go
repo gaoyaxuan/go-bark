@@ -17,12 +17,12 @@ type Client struct {
 type Options struct {
 	Client `json:"-"`
 
-	// 推送内容 (必填)
-	Msg string `json:"body"`
 	// token (必填)
 	Token string `json:"-"`
 	// 推送标题
-	Title string `json:"title,omitempty"`
+	Title string `json:"title"`
+	// 推送内容 (必填)
+	Msg string `json:"body,omitempty"`
 	// 消息分组
 	Group string `json:"group,omitempty"`
 	// 点击推送时，跳转的URL，支持URL Scheme 和 Universal Link
@@ -40,11 +40,11 @@ type Options struct {
 	// 推送角标
 	Badge int `json:"badge,omitempty"`
 	// 传 1 保存推送，传其他的不保存推送，不传按APP内设置来决定是否保存。
-	IsArchive int `json:"isArchive,omitempty"`
+	IsArchive int `json:"isArchive,omitempty,string"`
 	//持续响铃 1 持续响铃30秒
-	Call int `json:"call,omitempty"`
+	Call int `json:"call,omitempty,string"`
 	//level 为 critical时设置声音大小,取值0-10,不传默认为5
-	Volume int `json:"volume,omitempty"`
+	Volume int `json:"volume,omitempty,string"`
 	// 加密传输
 	Enc *EncOpt `json:"-"`
 }
@@ -116,8 +116,8 @@ func barkEncrypt(e *EncOpt, s []byte) (string, error) {
 }
 
 func handleOpt(o *Options) (string, error) {
-	if o.Msg == "" {
-		return "", errors.New("msg is empty")
+	if o.Title == "" {
+		return "", errors.New("title is empty")
 	}
 	if o.Token == "" {
 		return "", errors.New("token is empty")
@@ -129,7 +129,20 @@ func handleOpt(o *Options) (string, error) {
 			o.Volume = 10
 		}
 	}
-
+	if o.IsArchive != 0 {
+		if o.IsArchive < 0 {
+			o.IsArchive = 0
+		} else if o.IsArchive > 1 {
+			o.IsArchive = 1
+		}
+	}
+	if o.Call != 0 {
+		if o.Call < 0 {
+			o.Call = 0
+		} else if o.Call > 1 {
+			o.Call = 1
+		}
+	}
 	b, err := json.Marshal(o)
 	if err != nil {
 		return "", err
