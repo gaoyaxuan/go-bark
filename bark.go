@@ -148,7 +148,7 @@ func handleOpt(o *Options) (string, error) {
 		return "", err
 	}
 
-	if o.Enc != nil {
+	if o.Enc != nil && o.Enc.Mode != "" && o.Enc.Key != "" && o.Enc.Iv != "" {
 		c, err := barkEncrypt(o.Enc, b)
 		if err != nil {
 			return "", err
