@@ -10,13 +10,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
 
 // --- 类型定义和常量 ---
 
-// EncMode 加密模式 (新增 GCM)
+// EncMode 加密模式
 type EncMode string
 
 const (
@@ -29,7 +30,8 @@ const (
 type EncOpt struct {
 	Mode EncMode
 	Key  string
-	// CBC 模式为 IV (初始化向量)，GCM 模式为 Nonce (随机数)
+	// CBC 模式为 IV (初始化向量)
+	// GCM 模式为 Nonce (随机数)
 	Iv string
 }
 
@@ -61,7 +63,6 @@ type Options struct {
 	ID         string   `json:"id,omitempty"`
 	Delete     string   `json:"delete,omitempty"`
 
-	// --- 加密设置 (不参与 JSON 序列化) ---
 	Enc *EncOpt `json:"-"`
 }
 
@@ -70,15 +71,11 @@ const DefaultURL = "https://" + DefaultDomain
 
 var DefaultClient = New(DefaultURL)
 
-// --- 客户端初始化与核心方法 ---
-
 func New(serverURL string) *Client {
 	if serverURL == "" {
 		serverURL = DefaultURL
 	}
-
 	serverURL = strings.TrimSuffix(serverURL, "/")
-
 	if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
 		serverURL = "https://" + serverURL
 	}
@@ -179,14 +176,16 @@ func (o *Options) Validate() error {
 // preparePayload 处理普通 JSON 或加密 JSON
 func (c *Client) preparePayload(o *Options) ([]byte, error) {
 	if o.Enc == nil {
+		// 不加密推送,并不会把device_keys带到每个客户端
 		return json.Marshal(o)
 	}
 
-	// 1. 存储用于外部路由的 Keys (安全增强：不加密)
+	// 1. 存储用于外部路由的 Keys
 	deviceKeyToUse := o.DeviceKey
 	deviceKeysToUse := o.DeviceKeys
 
-	// 2. 创建 Options 副本，并清除路由 Keys 和 Enc 字段 (不加密)
+	// 2. 创建 Options 副本
+	// 把device_keys 带到每个客户端可能会泄露,所以清除Keys 和 Enc 字段
 	encOpts := *o
 	encOpts.DeviceKey = ""
 	encOpts.DeviceKeys = nil
@@ -208,29 +207,23 @@ func (c *Client) preparePayload(o *Options) ([]byte, error) {
 	encryptedPayload := make(map[string]interface{})
 	encryptedPayload["ciphertext"] = cipherText
 
-	// 合并 Key 逻辑
-	finalRoutingKeys := make([]string, len(deviceKeysToUse))
-	copy(finalRoutingKeys, deviceKeysToUse)
-
-	if deviceKeyToUse != "" {
-		found := false
-		for _, k := range finalRoutingKeys {
-			if k == deviceKeyToUse {
-				found = true
-				break
-			}
-		}
-		if !found {
+	if len(deviceKeysToUse) > 0 {
+		finalRoutingKeys := make([]string, 0, len(deviceKeysToUse)+1)
+		copy(finalRoutingKeys, deviceKeysToUse)
+		// device_key 和 device_keys 可能同时存在
+		if deviceKeyToUse != "" && !slices.Contains(finalRoutingKeys, deviceKeyToUse) {
 			finalRoutingKeys = append(finalRoutingKeys, deviceKeyToUse)
 		}
-	}
 
-	if len(finalRoutingKeys) > 1 {
-		encryptedPayload["device_keys"] = finalRoutingKeys
-	} else if len(finalRoutingKeys) == 1 {
-		encryptedPayload["device_key"] = finalRoutingKeys[0]
+		if len(finalRoutingKeys) > 1 {
+			encryptedPayload["device_keys"] = finalRoutingKeys
+		} else if len(finalRoutingKeys) == 1 {
+			encryptedPayload["device_key"] = finalRoutingKeys[0]
+		} else {
+			return nil, errors.New("missing device key for routing")
+		}
 	} else {
-		return nil, errors.New("missing device key for routing")
+		encryptedPayload["device_key"] = deviceKeyToUse
 	}
 
 	return json.Marshal(encryptedPayload)
@@ -251,7 +244,6 @@ func aesEncrypt(data []byte, opt *EncOpt) (string, error) {
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		// 理论上被 Validate 拦截
 		return "", err
 	}
 
@@ -272,7 +264,6 @@ func aesEncrypt(data []byte, opt *EncOpt) (string, error) {
 		blockMode.CryptBlocks(encrypted, paddedData)
 
 	case "ECB":
-		// ECB 模式 (不安全但 Bark 支持)
 		paddedData := pKCS7Padding(data, blockSize)
 		encrypted = make([]byte, len(paddedData))
 		for i := 0; i < len(paddedData); i += blockSize {
@@ -282,7 +273,6 @@ func aesEncrypt(data []byte, opt *EncOpt) (string, error) {
 	case "GCM":
 		// GCM 模式 (AEAD) - 不使用 PKCS7 填充
 		nonce := []byte(opt.Iv)
-		// GCM 推荐 Nonce 长度为 12 字节
 		if len(nonce) != 12 {
 			return "", fmt.Errorf("GCM Nonce length must be 12 bytes")
 		}
@@ -296,9 +286,17 @@ func aesEncrypt(data []byte, opt *EncOpt) (string, error) {
 		encrypted = aesGCM.Seal(nil, nonce, data, nil)
 
 	default:
-		// 理论上被 Validate 拦截
 		return "", errors.New("unsupported encryption mode")
 	}
 
 	return base64.StdEncoding.EncodeToString(encrypted), nil
+}
+
+// IntPtr returns a pointer to an int.
+func IntPtr(v int) *int {
+	return &v
+}
+
+func ToPtr[T any](v T) *T {
+	return &v
 }

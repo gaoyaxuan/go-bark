@@ -37,8 +37,9 @@ func main() {
 		DeviceKey: "YOUR_DEVICE_KEY", // 必填：你的 Bark Key
 		Title:     "Go Push Test",
 		Body:      "这是一个来自 Go 程序的推送通知。",
-		Sound:     "alarm",         // 设定 iOS 声音
-		Level:     "timeSensitive", // 时效性通知
+		Sound:     "alarm",
+		Level:     "timeSensitive",
+		Badge:  bark.IntPtr(500),
 	}
 	// 2. 使用默认客户端推送（自动发送到 DefaultURL/push）
 	if err := bark.DefaultClient.Push(options); err != nil {
