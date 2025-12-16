@@ -208,7 +208,7 @@ func (c *Client) preparePayload(o *Options) ([]byte, error) {
 	encryptedPayload["ciphertext"] = cipherText
 
 	if len(deviceKeysToUse) > 0 {
-		finalRoutingKeys := make([]string, 0, len(deviceKeysToUse)+1)
+		finalRoutingKeys := make([]string, len(deviceKeysToUse), len(deviceKeysToUse)+1)
 		copy(finalRoutingKeys, deviceKeysToUse)
 		// device_key 和 device_keys 可能同时存在
 		if deviceKeyToUse != "" && !slices.Contains(finalRoutingKeys, deviceKeyToUse) {
