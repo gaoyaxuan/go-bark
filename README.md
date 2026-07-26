@@ -131,7 +131,7 @@ GCM (Galois/Counter Mode) 是推荐的 AEAD 模式。
 
 **要求：**
 - **Key 长度**：16 (AES-128), 24 (AES-192), 或 32 (AES-256) 字节
-- **Iv 字段**：必须是 **12 字节**的 Nonce（随机数）
+- **Iv 字段**：可留空（推荐）。留空时每次推送自动生成 12 字节的安全随机 Nonce，并通过 payload 的 `iv` 参数传给服务端供客户端解密；传入时必须是 **12 字节**
 
 ```go
 package main
@@ -144,7 +144,6 @@ import (
 
 const (
 	AESKey128 = "16byteskey123456"
-	GCMNonce  = "12bytesnonce"
 )
 
 func main() {
@@ -158,7 +157,8 @@ func main() {
 		Enc: &bark.EncOpt{
 			Mode: bark.EncModeGCM, // 使用 GCM 模式
 			Key:  AESKey128,
-			Iv:   GCMNonce, // GCM 模式下作为 Nonce
+			// Iv 留空：自动生成随机 Nonce（推荐）
+			// Iv: "12bytesnonce", // 也可自行指定 12 字节 Nonce
 		},
 	}
 
@@ -176,7 +176,7 @@ CBC/ECB 是块加密模式。
 
 **要求：**
 - **Key 长度**：16, 24, 或 32 字节
-- **CBC 模式**：Iv 字段必须是 **16 字节**的 IV（初始化向量）
+- **CBC 模式**：Iv 字段可留空（推荐），留空时自动生成 16 字节安全随机 IV 并通过 payload 的 `iv` 参数传给服务端；传入时必须是 **16 字节**
 - **ECB 模式**：不需要 IV，Iv 字段可为空
 
 ```go
@@ -190,7 +190,6 @@ import (
 
 const (
 	AESKey256 = "32byteskey32byteskey32byteskey32"
-	CBC_IV    = "16bytesiv1234567"
 )
 
 func main() {
@@ -199,20 +198,21 @@ func main() {
 	customClient := bark.New(customURL)
 	cbcOptions := &bark.Options{
 		DeviceKey: "YOUR_ENCRYPTED_DEVICE_KEY",
-		Title:     "GCM 加密推送",
-		Body:      "这是使用 GCM 模式加密的内容。",
+		Title:     "CBC 加密推送",
+		Body:      "这是使用 CBC 模式加密的内容。",
 		Enc: &bark.EncOpt{
 			Mode: bark.EncModeCBC, // 使用 CBC 模式
 			Key:  AESKey256,
-			Iv:   CBC_IV, // CBC 模式需要 16 字节的 IV
+			// Iv 留空：每次推送自动生成不可预测的随机 IV（推荐）
+			// Iv: "16bytesiv1234567", // 也可自行指定 16 字节 IV（不推荐固定值）
 		},
 	}
 
 	if err := customClient.Push(cbcOptions); err != nil {
-		log.Fatalf("GCM 加密推送失败: %v", err)
+		log.Fatalf("CBC 加密推送失败: %v", err)
 	}
 
-	log.Println("GCM 加密推送成功!")
+	log.Println("CBC 加密推送成功!")
 }
 
 ```

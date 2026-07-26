@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -30,8 +31,9 @@ const (
 type EncOpt struct {
 	Mode EncMode
 	Key  string
-	// CBC 模式为 IV (初始化向量)
-	// GCM 模式为 Nonce (随机数)
+	// CBC 模式为 IV (初始化向量)，GCM 模式为 Nonce (随机数)。
+	// 留空时会为每次推送自动生成安全随机值，并通过 payload 的 iv 参数
+	// 传给服务端以便客户端解密（推荐留空）。
 	Iv string
 }
 
@@ -155,13 +157,14 @@ func (o *Options) Validate() error {
 
 		switch mode {
 		case EncModeCBC:
-			if len(o.Enc.Iv) == 0 {
-				return errors.New("CBC mode requires IV")
+			// IV 可留空，留空时自动生成；传入时必须是 16 字节
+			if len(o.Enc.Iv) != 0 && len(o.Enc.Iv) != cbcIvSize {
+				return fmt.Errorf("CBC IV length must be %d bytes when provided", cbcIvSize)
 			}
 		case EncModeGCM:
-			// GCM Nonce 最好是 12 字节，但我们只在 aesEncrypt 中进行严格校验，这里只检查是否为空。
-			if len(o.Enc.Iv) == 0 {
-				return errors.New("GCM mode requires Nonce (Iv field)")
+			// Nonce 可留空，留空时自动生成；传入时必须是 12 字节
+			if len(o.Enc.Iv) != 0 && len(o.Enc.Iv) != gcmNonceSize {
+				return fmt.Errorf("GCM Nonce length must be %d bytes when provided", gcmNonceSize)
 			}
 		case EncModeECB:
 			// ECB 不需要 IV/Nonce
@@ -197,8 +200,8 @@ func (c *Client) preparePayload(o *Options) ([]byte, error) {
 		return nil, err
 	}
 
-	// 4. 执行加密
-	cipherText, err := aesEncrypt(plainBytes, o.Enc)
+	// 4. 执行加密（Iv 为空时自动生成，返回实际使用的 iv）
+	cipherText, ivUsed, err := aesEncrypt(plainBytes, o.Enc)
 	if err != nil {
 		return nil, err
 	}
@@ -206,6 +209,9 @@ func (c *Client) preparePayload(o *Options) ([]byte, error) {
 	// 5. 构建外部 Payload
 	encryptedPayload := make(map[string]interface{})
 	encryptedPayload["ciphertext"] = cipherText
+	if ivUsed != "" {
+		encryptedPayload["iv"] = ivUsed
+	}
 
 	if len(deviceKeysToUse) > 0 {
 		finalRoutingKeys := make([]string, len(deviceKeysToUse), len(deviceKeysToUse)+1)
@@ -231,6 +237,11 @@ func (c *Client) preparePayload(o *Options) ([]byte, error) {
 
 // --- AES 加密实现 ---
 
+const (
+	cbcIvSize    = aes.BlockSize // 16
+	gcmNonceSize = 12
+)
+
 // pKCS7Padding 实现了 PKCS7 填充，仅用于 CBC 和 ECB
 func pKCS7Padding(ciphertext []byte, blockSize int) []byte {
 	padding := blockSize - len(ciphertext)%blockSize
@@ -238,25 +249,64 @@ func pKCS7Padding(ciphertext []byte, blockSize int) []byte {
 	return append(ciphertext, padtext...)
 }
 
-// aesEncrypt 使用标准库进行 AES 加密
-func aesEncrypt(data []byte, opt *EncOpt) (string, error) {
+// randomIv 生成 n 字符的随机字母数字 IV/Nonce。
+// Bark 客户端把 iv 参数按字符串的 UTF-8 字节使用，所以必须是可打印字符
+// 才能通过 JSON/URL 原样传输。随机源为 crypto/rand，并使用拒绝采样
+// 消除模偏差，保证每个字符在 62 个候选中均匀分布：
+// CBC 需要 IV 不可预测（CSPRNG 满足）；GCM 需要 Nonce 不重复
+// （12 字符 ≈ 71 bits 熵，碰撞概率可忽略）。
+func randomIv(n int) (string, error) {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	// 248 是 <=255 中最大的 62 的倍数，超出则拒绝重采样，避免取模偏差
+	const maxUnbiased = 248
+	out := make([]byte, 0, n)
+	buf := make([]byte, n*2)
+	for len(out) < n {
+		if _, err := rand.Read(buf); err != nil {
+			return "", err
+		}
+		for _, b := range buf {
+			if b >= maxUnbiased {
+				continue
+			}
+			out = append(out, charset[int(b)%len(charset)])
+			if len(out) == n {
+				break
+			}
+		}
+	}
+	return string(out), nil
+}
+
+// aesEncrypt 使用标准库进行 AES 加密。
+// 返回密文和实际使用的 IV/Nonce（ECB 模式返回空字符串）。
+// opt.Iv 为空时按对应模式的安全要求随机生成。
+func aesEncrypt(data []byte, opt *EncOpt) (string, string, error) {
 	key := []byte(opt.Key)
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	var encrypted []byte
+	var ivUsed string
 	blockSize := block.BlockSize()
 	mode := strings.ToUpper(string(opt.Mode))
 
 	switch mode {
 	case "CBC":
-		iv := []byte(opt.Iv)
-		if len(iv) != blockSize {
-			return "", fmt.Errorf("CBC IV length must be %d", blockSize)
+		ivStr := opt.Iv
+		if ivStr == "" {
+			if ivStr, err = randomIv(cbcIvSize); err != nil {
+				return "", "", err
+			}
 		}
+		iv := []byte(ivStr)
+		if len(iv) != blockSize {
+			return "", "", fmt.Errorf("CBC IV length must be %d", blockSize)
+		}
+		ivUsed = ivStr
 
 		paddedData := pKCS7Padding(data, blockSize)
 		blockMode := cipher.NewCBCEncrypter(block, iv)
@@ -272,24 +322,31 @@ func aesEncrypt(data []byte, opt *EncOpt) (string, error) {
 
 	case "GCM":
 		// GCM 模式 (AEAD) - 不使用 PKCS7 填充
-		nonce := []byte(opt.Iv)
-		if len(nonce) != 12 {
-			return "", fmt.Errorf("GCM Nonce length must be 12 bytes")
+		nonceStr := opt.Iv
+		if nonceStr == "" {
+			if nonceStr, err = randomIv(gcmNonceSize); err != nil {
+				return "", "", err
+			}
 		}
+		nonce := []byte(nonceStr)
+		if len(nonce) != gcmNonceSize {
+			return "", "", fmt.Errorf("GCM Nonce length must be %d bytes", gcmNonceSize)
+		}
+		ivUsed = nonceStr
 
 		aesGCM, err := cipher.NewGCM(block)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		// Seal(dst, nonce, plaintext, additionalData)
 		// additionalData 传 nil, plaintext 传未填充的数据
 		encrypted = aesGCM.Seal(nil, nonce, data, nil)
 
 	default:
-		return "", errors.New("unsupported encryption mode")
+		return "", "", errors.New("unsupported encryption mode")
 	}
 
-	return base64.StdEncoding.EncodeToString(encrypted), nil
+	return base64.StdEncoding.EncodeToString(encrypted), ivUsed, nil
 }
 
 // IntPtr returns a pointer to an int.
